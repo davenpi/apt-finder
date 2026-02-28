@@ -2,10 +2,11 @@
 Apartment search pipeline: inventory → filter → evaluate → rank.
 
 Usage:
-    uv run python search.py inventory   # Step 1+2: scrape listings, filter, save to data/inventory.json
-    uv run python search.py evaluate    # Step 3:   evaluate each listing, save to data/evaluations.json
-    uv run python search.py rank        # Step 4:   rank and write findings/*.md
-    uv run python search.py             # Run all steps end-to-end
+    apt find -l EV -n 15      # Full pipeline: search → filter → evaluate → rank
+    apt find -l WV             # Same for West Village (default 15 listings)
+    apt eval <url>             # Evaluate a single listing, append to latest findings
+    apt search -l EV -n 15     # Just inventory + filter (debugging)
+    apt rank                   # Just rank from existing evaluations (debugging)
 """
 
 import asyncio
@@ -15,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import click
 from browser_use import Agent, ChatBrowserUse
 from browser_use.browser.profile import BrowserProfile
 from browser_use.browser.session import BrowserSession
@@ -26,9 +28,12 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-SEARCH_URL = "https://streeteasy.com/for-rent/east-village/price:-4300"
+LOCATIONS = {
+    "EV": "https://streeteasy.com/for-rent/east-village/price:-4300",
+    "WV": "https://streeteasy.com/for-rent/west-village/price:-4300",
+}
+
 BUDGET_CEILING = 4350
-MAX_LISTINGS = 15
 BATCH_SIZE = 5
 HEADLESS = False
 DATA_DIR = Path("data")
@@ -70,6 +75,9 @@ class ListingEvaluation(BaseModel):
     bathroom_assessment: str = Field(description="Bathroom condition assessment")
     kitchen_assessment: str = Field(description="Kitchen condition assessment")
     finishes_assessment: str = Field(description="Overall finishes assessment")
+    days_on_market: Optional[int] = Field(
+        default=None, description="Days on market if shown on the listing"
+    )
     red_flags: str = Field(description="Any red flags noticed")
     vibe: str = Field(description="Overall vibe of the apartment")
     score: float = Field(description="Score from 1-10 against preferences")
@@ -81,9 +89,9 @@ class ListingEvaluation(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-async def run_inventory() -> list[Listing]:
+async def run_inventory(search_url: str, max_listings: int) -> list[Listing]:
     print("\n=== STEP 1: Inventory ===")
-    print(f"Searching: {SEARCH_URL}")
+    print(f"Searching: {search_url}")
 
     llm = ChatBrowserUse()
     profile = BrowserProfile(
@@ -92,7 +100,7 @@ async def run_inventory() -> list[Listing]:
     session = BrowserSession(browser_profile=profile)
 
     agent = Agent(
-        task=f"""Go to {SEARCH_URL}
+        task=f"""Go to {search_url}
 
 You are extracting apartment listings from StreetEasy search results.
 
@@ -100,11 +108,15 @@ The results are in a LIST on the LEFT side of the page (not the map on the right
 Do NOT interact with the map. Focus only on the listing cards in the left column.
 
 1. Wait for the search results to load.
-2. Scroll down through the listing cards on the left side of the page.
-3. Extract the organic listings you see on this page.
-4. Look for a PAGINATION control (page numbers or "Next" link) at the bottom of the
-   listing column. Click to page 2 and extract those listings too. Continue to page 3
-   if needed, until you have up to {MAX_LISTINGS} organic listings total.
+2. Extract all organic listings visible on page 1 WITHOUT scrolling.
+3. Now look for the PAGINATION control at the bottom of the listing column on the
+   left side of the page. It will show page numbers like "1 2 3 ..." or a "Next"
+   link. Do NOT scroll to find it — instead, use Page Down key once or twice to
+   bring it into view.
+4. Click the link for page 2. Wait for new listings to load.
+5. Extract the listings from page 2.
+6. Continue to page 3 if needed, until you have up to {max_listings} organic
+   listings total.
 
 IMPORTANT: SKIP any sponsored/featured listings. These have "?featured=1" or
 "?infeed=1" in their URL, or are labeled "Featured" or "Sponsored" on the page.
@@ -116,7 +128,7 @@ For each listing extract:
 - baths: bathroom info (e.g. "1 bath")
 - url: the full URL to the listing detail page
 
-Stop once you have {MAX_LISTINGS} organic listings or run out of pages.""",
+Stop once you have {max_listings} organic listings or run out of pages.""",
         llm=llm,
         browser_session=session,
         output_model_schema=InventoryResult,
@@ -136,7 +148,7 @@ Stop once you have {MAX_LISTINGS} organic listings or run out of pages.""",
             print(f"Raw output:\n{raw[:500]}")
         return []
 
-    listings = inventory.listings[:MAX_LISTINGS]
+    listings = inventory.listings[:max_listings]
     print(f"Found {len(inventory.listings)} listings, keeping first {len(listings)}")
     for listing in listings:
         print(
@@ -146,18 +158,18 @@ Stop once you have {MAX_LISTINGS} organic listings or run out of pages.""",
     return listings
 
 
-def save_inventory(listings: list[Listing]) -> Path:
+def save_inventory(listings: list[Listing], location_key: str) -> Path:
     DATA_DIR.mkdir(exist_ok=True)
-    path = DATA_DIR / "inventory.json"
+    path = DATA_DIR / f"{location_key}_inventory.json"
     path.write_text(json.dumps([item.model_dump() for item in listings], indent=2))
     print(f"Saved {len(listings)} listings to {path}")
     return path
 
 
-def load_inventory() -> list[Listing]:
-    path = DATA_DIR / "inventory.json"
+def load_inventory(location_key: str) -> list[Listing]:
+    path = DATA_DIR / f"{location_key}_inventory.json"
     if not path.exists():
-        print(f"ERROR: {path} not found. Run 'search.py inventory' first.")
+        print(f"ERROR: {path} not found. Run 'apt search -l {location_key}' first.")
         sys.exit(1)
     data = json.loads(path.read_text())
     listings = [Listing(**item) for item in data]
@@ -241,6 +253,7 @@ Then produce a structured evaluation. Fill in every field carefully:
 - elevator_or_walkup: "Elevator" or "Walkup"
 - broker_fee: "No fee", "1 month", "15%", etc.
 - move_in_date: if listed, null otherwise
+- days_on_market: number of days on market if shown on the listing, null otherwise
 - light_assessment: What do the photos tell you about natural light? How many
   windows visible? Which direction might they face? Any rooms that look dark?
 - bathroom_assessment: Condition, cleanliness, modern or dated fixtures?
@@ -248,8 +261,33 @@ Then produce a structured evaluation. Fill in every field carefully:
 - finishes_assessment: Overall condition — floors, walls, fixtures. Modern or dated?
 - red_flags: Missing photos? Suspiciously low price? Anything sketchy?
 - vibe: Does this feel like a place you'd want to come home to?
-- score: Rate 1-10 against the preferences above
-- score_justification: One-line justification for the score""",
+
+SCORING — start at 5.0 (neutral) and adjust up/down. Be harsh and spread scores.
+
+Bonuses (add points):
+  +1.0  In-unit W/D
+  +1.0  Excellent natural light (every room bright, big windows)
+  +0.5  Modern/renovated bathroom
+  +0.5  Modern/renovated kitchen
+  +0.5  Under $3,800/mo
+  +0.5  Quiet side street or rear-facing
+  +0.5  No broker fee
+
+Penalties (subtract points):
+  -1.0  Any room with no window (windowless bedroom/flex = automatic)
+  -2.0  Stained/grimy bathroom (dealbreaker)
+  -1.0  Walkup AND floor 4+ (hauling groceries/laundry)
+  -0.5  Walkup floor 3
+  -1.0  No W/D at all (not even in-building)
+  -1.0  Avenue-facing (noise)
+  -1.0  60+ days on market (something is wrong)
+  -0.5  30-60 days on market (yellow flag)
+  -0.5  Photos are "representative" / not actual unit
+  -0.5  Missing bathroom or kitchen photos
+  -0.5  Move-in date after April 15, 2026
+
+- score: the final score after applying bonuses and penalties
+- score_justification: list the specific bonuses and penalties you applied""",
             llm=llm,
             browser_session=session,
             output_model_schema=ListingEvaluation,
@@ -284,18 +322,18 @@ async def evaluate_all(listings: list[Listing]) -> list[ListingEvaluation]:
     return evaluations
 
 
-def save_evaluations(evaluations: list[ListingEvaluation]) -> Path:
+def save_evaluations(evaluations: list[ListingEvaluation], location_key: str) -> Path:
     DATA_DIR.mkdir(exist_ok=True)
-    path = DATA_DIR / "evaluations.json"
+    path = DATA_DIR / f"{location_key}_evaluations.json"
     path.write_text(json.dumps([e.model_dump() for e in evaluations], indent=2))
     print(f"Saved {len(evaluations)} evaluations to {path}")
     return path
 
 
-def load_evaluations() -> list[ListingEvaluation]:
-    path = DATA_DIR / "evaluations.json"
+def load_evaluations(location_key: str) -> list[ListingEvaluation]:
+    path = DATA_DIR / f"{location_key}_evaluations.json"
     if not path.exists():
-        print(f"ERROR: {path} not found. Run 'search.py evaluate' first.")
+        print(f"ERROR: {path} not found. Run 'apt find -l {location_key}' first.")
         sys.exit(1)
     data = json.loads(path.read_text())
     evaluations = [ListingEvaluation(**item) for item in data]
@@ -308,19 +346,21 @@ def load_evaluations() -> list[ListingEvaluation]:
 # ---------------------------------------------------------------------------
 
 
-def rank_and_output(evaluations: list[ListingEvaluation]) -> Path:
+def rank_and_output(evaluations: list[ListingEvaluation], search_url: str) -> Path:
     print(f"\n=== STEP 4: Rank & Output ({len(evaluations)} evaluations) ===")
 
     ranked = sorted(evaluations, key=lambda e: e.score, reverse=True)
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    outpath = Path("findings") / f"{timestamp}.md"
+    outdir = Path("findings")
+    outdir.mkdir(exist_ok=True)
+    outpath = outdir / f"{timestamp}.md"
 
     lines: list[str] = []
     lines.append(
         f"# Apartment Search Results — {datetime.now().strftime('%Y-%m-%d')}\n"
     )
-    lines.append(f"Search: {SEARCH_URL}")
+    lines.append(f"Search: {search_url}")
     lines.append(f"Evaluated: {len(ranked)} listings\n")
 
     for i, ev in enumerate(ranked, 1):
@@ -336,6 +376,8 @@ def rank_and_output(evaluations: list[ListingEvaluation]) -> Path:
         )
         if ev.move_in_date:
             lines.append(f"- **Move-in**: {ev.move_in_date}")
+        if ev.days_on_market is not None:
+            lines.append(f"- **Days on market**: {ev.days_on_market}")
         lines.append(f"- **Score justification**: {ev.score_justification}")
         lines.append("")
         lines.append(f"**Light**: {ev.light_assessment}\n")
@@ -352,71 +394,121 @@ def rank_and_output(evaluations: list[ListingEvaluation]) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Commands
+# CLI
 # ---------------------------------------------------------------------------
 
 
-async def cmd_inventory():
-    """Scrape StreetEasy, filter, and save listings."""
-    all_listings = await run_inventory()
-    if not all_listings:
-        print("No listings found.")
-        return
-    filtered = filter_listings(all_listings)
-    if not filtered:
-        print("All listings filtered out.")
-        return
-    save_inventory(filtered)
-
-
-async def cmd_evaluate():
-    """Load inventory, evaluate each listing in parallel, save results."""
-    listings = load_inventory()
-    evaluations = await evaluate_all(listings)
-    if not evaluations:
-        print("No evaluations completed.")
-        return
-    save_evaluations(evaluations)
-
-
-def cmd_rank():
-    """Load evaluations, rank, and write findings markdown."""
-    evaluations = load_evaluations()
-    rank_and_output(evaluations)
-
-
-async def cmd_all():
-    """Run the full pipeline end-to-end."""
-    await cmd_inventory()
-    listings = load_inventory()
-    if not listings:
-        return
-    evaluations = await evaluate_all(listings)
-    if not evaluations:
-        print("No evaluations completed.")
-        return
-    save_evaluations(evaluations)
-    rank_and_output(evaluations)
-
-
-COMMANDS = {
-    "inventory": lambda: asyncio.run(cmd_inventory()),
-    "evaluate": lambda: asyncio.run(cmd_evaluate()),
-    "rank": cmd_rank,
-}
-
-if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else None
-
-    print("=" * 60)
-    print("  APT-FINDER")
-    print("=" * 60)
-
-    if cmd is None:
-        asyncio.run(cmd_all())
-    elif cmd in COMMANDS:
-        COMMANDS[cmd]()
-    else:
-        print(f"Unknown command: {cmd}")
-        print("Usage: search.py [inventory | evaluate | rank]")
+def resolve_location(location: str) -> tuple[str, str]:
+    """Resolve a location shortcut to (key, url). Exits on unknown key."""
+    key = location.upper()
+    if key not in LOCATIONS:
+        click.echo(f"Unknown location: {location}")
+        click.echo(f"Available: {', '.join(LOCATIONS)}")
         sys.exit(1)
+    return key, LOCATIONS[key]
+
+
+@click.group()
+def cli():
+    """apt — apartment search pipeline."""
+    pass
+
+
+@cli.command()
+@click.option("-l", "--location", required=True, help="Location shortcut (EV, WV)")
+@click.option(
+    "-n", "--num", default=15, show_default=True, help="Max listings to scrape"
+)
+def find(location: str, num: int):
+    """Full pipeline: search → filter → evaluate → rank."""
+    key, search_url = resolve_location(location)
+
+    async def _run():
+        all_listings = await run_inventory(search_url, num)
+        if not all_listings:
+            click.echo("No listings found.")
+            return
+        filtered = filter_listings(all_listings)
+        if not filtered:
+            click.echo("All listings filtered out.")
+            return
+        save_inventory(filtered, key)
+        evaluations = await evaluate_all(filtered)
+        if not evaluations:
+            click.echo("No evaluations completed.")
+            return
+        save_evaluations(evaluations, key)
+        rank_and_output(evaluations, search_url)
+
+    asyncio.run(_run())
+
+
+@cli.command("eval")
+@click.argument("url")
+def eval_url(url: str):
+    """Evaluate a single listing and append to evaluations."""
+    # Extract a rough address from the URL for the stub
+    # e.g. https://streeteasy.com/building/15-cornelia-street-new_york/5f → 15 cornelia street
+    parts = url.rstrip("/").split("/")
+    address_slug = parts[-2] if len(parts) >= 2 else "unknown"
+    unit = parts[-1] if len(parts) >= 2 else ""
+    address = address_slug.replace("-", " ").replace("_", " ").title()
+    if unit:
+        address = f"{address} #{unit.upper()}"
+
+    stub = Listing(address=address, price=0, beds="", baths="", url=url)
+
+    async def _run():
+        semaphore = asyncio.Semaphore(1)
+        evaluation = await evaluate_listing(stub, semaphore)
+        if not evaluation:
+            click.echo("Evaluation failed.")
+            return
+
+        # Append to generic evaluations file
+        evals_path = DATA_DIR / "evaluations.json"
+        DATA_DIR.mkdir(exist_ok=True)
+        existing: list[dict] = []
+        if evals_path.exists():
+            existing = json.loads(evals_path.read_text())
+        existing.append(evaluation.model_dump())
+        evals_path.write_text(json.dumps(existing, indent=2))
+        click.echo(f"Appended evaluation to {evals_path}")
+
+        # Re-rank with all evaluations
+        all_evals = [ListingEvaluation(**e) for e in existing]
+        rank_and_output(all_evals, url)
+
+    asyncio.run(_run())
+
+
+@cli.command()
+@click.option("-l", "--location", required=True, help="Location shortcut (EV, WV)")
+@click.option(
+    "-n", "--num", default=15, show_default=True, help="Max listings to scrape"
+)
+def search(location: str, num: int):
+    """Just inventory + filter (debugging). Saves to data/."""
+    key, search_url = resolve_location(location)
+
+    async def _run():
+        all_listings = await run_inventory(search_url, num)
+        if not all_listings:
+            click.echo("No listings found.")
+            return
+        filtered = filter_listings(all_listings)
+        if not filtered:
+            click.echo("All listings filtered out.")
+            return
+        save_inventory(filtered, key)
+
+    asyncio.run(_run())
+
+
+@cli.command()
+@click.option("-l", "--location", required=True, help="Location shortcut (EV, WV)")
+def rank(location: str):
+    """Rank from existing evaluations and write findings."""
+    key, search_url = resolve_location(location)
+    evaluations = load_evaluations(key)
+    rank_and_output(evaluations, search_url)
