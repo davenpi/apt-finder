@@ -41,7 +41,7 @@ source .venv/bin/activate
 apt find -l EV -n 15
 
 # Evaluate a single listing URL
-apt eval https://streeteasy.com/building/123-main-street/4a
+apt eval https://streeteasy.com/building/15-cornelia-street-new_york/5f
 
 # Just search + filter (no evaluation)
 apt search -l EV -n 10
