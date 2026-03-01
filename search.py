@@ -35,7 +35,7 @@ LOCATIONS = {
     "WV": "https://streeteasy.com/for-rent/west-village/price:-4300",
 }
 
-BUDGET_CEILING = 4350
+BUDGET_CEILING = 4300
 BATCH_SIZE = 5
 HEADLESS = False
 BROWSER_DATA_DIR = Path("browser_data")

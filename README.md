@@ -7,136 +7,103 @@ AI-powered apartment search for NYC. Uses [browser-use](https://github.com/brows
 1. **Search** — A browser agent navigates StreetEasy, extracts listings, and filters out sponsored/over-budget/duplicate results.
 2. **Evaluate** — Parallel browser agents visit each listing, click through photos, and produce structured evaluations (light, finishes, bathroom condition, red flags, etc.).
 3. **Rank** — Evaluations are scored against your preferences and written to a markdown report in `findings/`.
-4. **Sync** — Reads a Google Sheet where you paste listing URLs, extracts agent contact info, and writes it back for outreach tracking.
+4. **Track** — Two options for outreach tracking:
+   - **Notion** (`apt add`) — Creates rich pages with contact info, toggles, bookmarks, and maps.
+   - **Google Sheets** (`apt sync`) — Fills in agent contact info on a spreadsheet.
 
 ## Setup
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-# Clone and install
 git clone https://github.com/davenpi/apt-finder.git
 cd apt-finder
-uv sync
-uv pip install -e .
-
-# Set up browser-use credentials
-cp .env.example .env
-# Edit .env with your BROWSER_USE_API_KEY
-
-# Create your preferences file
-cp preferences.example.md preferences.md
-# Edit preferences.md with your search criteria
-```
-
-Activate the venv so the `apt` command is on your PATH:
-
-```bash
+uv sync && uv pip install -e .
+cp .env.example .env       # add your BROWSER_USE_API_KEY
+cp preferences.example.md preferences.md  # your search criteria
 source .venv/bin/activate
 ```
 
-### Google Sheets setup (for `apt sync`)
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create a project (or use an existing one).
-2. Enable the **Google Sheets API** and **Google Drive API**.
-3. Go to **APIs & Services > Credentials**, create an **OAuth 2.0 Client ID** (Desktop app type).
-4. Download the JSON and save it as `credentials.json` in the project root.
-5. Create a Google Sheet. `apt sync` expects this column layout starting at B2:
-
-   | URL | Agent Name | Agent Email | Agent Phone | Available | Status | Tour Date | Notes |
-   | --- | ---------- | ----------- | ----------- | --------- | ------ | --------- | ----- |
-
-   Paste listing URLs into the **URL** column. The agent fills in contact info, availability, and tour dates. **Status** tracks your outreach pipeline: `new` → `contacted` → `replied` → `touring` → `passed`.
-
-6. Set the sheet URL:
-
-   ```bash
-   export SHEET_URL="https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit"
-   ```
-
-   Or add it to your `.env` file.
-
-7. On first run, a browser window will open for Google OAuth consent. The token is cached in `authorized_user.json` for subsequent runs.
-
-### Notion setup (for `apt init` / `apt add`)
+### Notion setup
 
 1. Create a [Notion internal integration](https://www.notion.so/my-integrations) and copy the token.
-2. In Notion, create a page called "Apt search" (or use an existing one). Share it with your integration via **... > Connections > Add connection**.
-3. Copy the page ID from the URL (the 32-character hex string after the page name).
-4. Add to your `.env`:
+2. Create a page in Notion (e.g. "Apt search") and share it with your integration via **... > Connections**.
+3. Add to `.env`:
 
-   ```bash
+   ```
    NOTION_TOKEN="secret_..."
-   NOTION_PAGE_ID="316d3e8f-..."   # your Apt search page ID
+   NOTION_PAGE_ID="316d3e8f-..."
    ```
 
-5. Run `apt init` to create the listings database. It prints a database ID — add it to `.env`:
+4. Run `apt init` — it prints a database ID. Add that too:
 
-   ```bash
+   ```
    NOTION_DB_ID="abc123..."
    ```
 
-6. Now `apt add <url>` will create listing pages with contact info and rich blocks.
+### Google Sheets setup
+
+1. Enable the **Google Sheets API** and **Google Drive API** in [Google Cloud Console](https://console.cloud.google.com/).
+2. Create an **OAuth 2.0 Client ID** (Desktop app), download the JSON as `credentials.json`.
+3. Create a sheet with columns starting at B2: URL | Agent Name | Agent Email | Agent Phone | Available | Status | Tour Date | Notes.
+4. Add to `.env`:
+
+   ```
+   SHEET_URL="https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit"
+   ```
+
+5. First run opens a browser for OAuth consent. Token is cached in `authorized_user.json`.
 
 ## Usage
 
 ```bash
-# Full pipeline: search, evaluate, and rank
+# Full pipeline: search → evaluate → rank
 apt find -l EV -n 15
 
-# Evaluate a single listing URL
-apt eval https://streeteasy.com/building/15-cornelia-street-new_york/5f
-
-# One-time: create the Notion listings database
-apt init
+# Evaluate a single listing
+apt eval <url>
 
 # Add a listing to Notion + extract contact info
-apt add https://streeteasy.com/building/15-cornelia-street-new_york/5f
+apt add <url>
 
-# Sync Google Sheet — fill in agent contact info for new listings
+# Sync Google Sheet — fill in contact info for new rows
 apt sync
 
-# Just search + filter (no evaluation)
-apt search -l EV -n 10
-
-# Re-rank from existing evaluations
-apt rank -l EV
+# Debugging helpers
+apt search -l EV -n 10   # just inventory + filter
+apt rank -l EV            # re-rank from existing evaluations
 ```
 
 ### Location shortcuts
 
-| Flag      | Neighborhood        | URL                                                |
-| --------- | ------------------- | -------------------------------------------------- |
-| `EV`      | East Village        | `streeteasy.com/for-rent/east-village/price:-4300` |
-| `EV-CORE` | East Village (core) | Same + bounding box: ~E 2nd–E 14th, 1st Ave–Ave B  |
-| `WV`      | West Village        | `streeteasy.com/for-rent/west-village/price:-4300` |
+| Flag      | Neighborhood        |
+| --------- | ------------------- |
+| `EV`      | East Village        |
+| `EV-CORE` | East Village (core) |
+| `WV`      | West Village        |
 
 Add more in the `LOCATIONS` dict in `search.py`.
 
 ## Configuration
 
-### `preferences.md`
+| Constant         | Default | Description                                    |
+| ---------------- | ------- | ---------------------------------------------- |
+| `BUDGET_CEILING` | 4300    | Max rent before filtering out a listing        |
+| `BATCH_SIZE`     | 5       | Max concurrent browser agents                  |
+| `HEADLESS`       | False   | Set True to hide browsers (False for captchas) |
 
-This is the core of the system. The evaluation agents read this file to understand what you care about. See `preferences.example.md` for a template.
-
-### `search.py` constants
-
-| Constant         | Default | Description                                                        |
-| ---------------- | ------- | ------------------------------------------------------------------ |
-| `BUDGET_CEILING` | 4350    | Max price before filtering out a listing                           |
-| `BATCH_SIZE`     | 5       | Max concurrent browser agents during evaluation                    |
-| `HEADLESS`       | False   | Set to True to hide browsers (you'll need False to solve captchas) |
+Edit `preferences.md` to control how listings are scored. See `preferences.example.md` for a template.
 
 ## Output
 
-- `data/{location}_inventory.json` — Raw filtered listings from search
+- `data/{location}_inventory.json` — Filtered listings from search
 - `data/{location}_evaluations.json` — Structured evaluations
 - `findings/{timestamp}.md` — Ranked markdown report
 
 ## Roadmap
 
-- [ ] **Bounding box search** — StreetEasy supports `in_rect` coordinates for map-bounded searches, but the URL only works in Safari (Chromium drops the bounding box). Need to either fix the URL encoding or have the agent zoom the map after loading.
+- [ ] **Bounding box search** — StreetEasy `in_rect` only works in Safari; need to fix URL encoding or have the agent zoom the map.
 - [ ] **More listing sources** — Apartments.com, Zillow, Craigslist
-- [ ] **Automated outreach** — `apt reach` command to draft/send inquiry emails for new listings
-- [x] **Notion integration** — `apt init` + `apt add` for visual tracking (Notion API)
-- [ ] **Dedup across runs** — Merge evaluations instead of overwriting, skip already-evaluated listings
+- [ ] **Automated outreach** — `apt reach` to draft/send inquiry emails
+- [x] **Notion integration** — `apt init` + `apt add` for visual tracking
+- [ ] **Dedup across runs** — Skip already-evaluated listings
