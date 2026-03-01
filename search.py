@@ -541,19 +541,26 @@ def find(location: str, num: int):
     asyncio.run(_run())
 
 
-@cli.command("eval")
-@click.argument("url")
-def eval_url(url: str):
-    """Evaluate a single listing and append to evaluations."""
-    # Extract a rough address from the URL for the stub
-    # e.g. https://streeteasy.com/building/15-cornelia-street-new_york/5f → 15 cornelia street
+def address_from_url(url: str) -> str:
+    """Extract a human-readable address from a StreetEasy URL.
+
+    e.g. https://streeteasy.com/building/15-cornelia-street-new_york/5f
+         → "15 Cornelia Street #5F"
+    """
     parts = url.rstrip("/").split("/")
     address_slug = parts[-2] if len(parts) >= 2 else "unknown"
     unit = parts[-1] if len(parts) >= 2 else ""
     address = address_slug.replace("-", " ").replace("_", " ").title()
     if unit:
         address = f"{address} #{unit.upper()}"
+    return address
 
+
+@cli.command("eval")
+@click.argument("url")
+def eval_url(url: str):
+    """Evaluate a single listing and append to evaluations."""
+    address = address_from_url(url)
     stub = Listing(address=address, price=0, beds="", baths="", url=url)
 
     async def _run():
@@ -611,6 +618,47 @@ def rank(location: str):
     key, search_url = resolve_location(location)
     evaluations = load_evaluations(key)
     rank_and_output(evaluations, search_url)
+
+
+@cli.command("init")
+def init_notion():
+    """One-time setup: create the Notion listings database."""
+    from notion import create_database
+
+    click.echo("Creating Notion database...")
+    db_id = create_database()
+    click.echo(f"Database created: {db_id}")
+    click.echo(f'\nAdd this to your .env file:\n  NOTION_DB_ID="{db_id}"')
+
+
+@cli.command("add")
+@click.argument("url")
+def add_to_notion(url: str):
+    """Add a listing to Notion and extract contact info."""
+    from notion import add_listing, append_listing_blocks, update_listing
+
+    address = address_from_url(url)
+    click.echo(f"Adding to Notion: {address}")
+
+    page_id = add_listing(url, address)
+    click.echo(f"  Page created: {page_id}")
+
+    async def _run():
+        contact = await extract_contact(url)
+        if contact:
+            update_listing(
+                page_id,
+                agent_name=contact.agent_name,
+                agent_email=contact.agent_email,
+                agent_phone=contact.agent_phone,
+                available_date=contact.available_date,
+                tour_dates=contact.tour_dates,
+            )
+            click.echo("  Contact info saved to properties")
+        append_listing_blocks(address, url, contact)
+        click.echo("  Rich blocks added to page")
+
+    asyncio.run(_run())
 
 
 @cli.command()

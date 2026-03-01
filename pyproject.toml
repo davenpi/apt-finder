@@ -9,13 +9,14 @@ dependencies = [
     "click>=8.0",
     "google-auth-oauthlib>=1.0.0",
     "gspread>=6.1.0",
+    "requests>=2.28.0",
 ]
 
 [project.scripts]
 apt = "search:cli"
 
 [tool.setuptools]
-py-modules = ["search", "sheet"]
+py-modules = ["search", "sheet", "notion"]
 
 [dependency-groups]
 dev = [

@@ -172,6 +172,7 @@ dependencies = [
     { name = "click" },
     { name = "google-auth-oauthlib" },
     { name = "gspread" },
+    { name = "requests" },
 ]
 
 [package.dev-dependencies]
@@ -186,6 +187,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "google-auth-oauthlib", specifier = ">=1.0.0" },
     { name = "gspread", specifier = ">=6.1.0" },
+    { name = "requests", specifier = ">=2.28.0" },
 ]
 
 [package.metadata.requires-dev]

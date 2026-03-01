@@ -58,6 +58,26 @@ source .venv/bin/activate
 
 7. On first run, a browser window will open for Google OAuth consent. The token is cached in `authorized_user.json` for subsequent runs.
 
+### Notion setup (for `apt init` / `apt add`)
+
+1. Create a [Notion internal integration](https://www.notion.so/my-integrations) and copy the token.
+2. In Notion, create a page called "Apt search" (or use an existing one). Share it with your integration via **... > Connections > Add connection**.
+3. Copy the page ID from the URL (the 32-character hex string after the page name).
+4. Add to your `.env`:
+
+   ```bash
+   NOTION_TOKEN="secret_..."
+   NOTION_PAGE_ID="316d3e8f-..."   # your Apt search page ID
+   ```
+
+5. Run `apt init` to create the listings database. It prints a database ID — add it to `.env`:
+
+   ```bash
+   NOTION_DB_ID="abc123..."
+   ```
+
+6. Now `apt add <url>` will create listing pages with contact info and rich blocks.
+
 ## Usage
 
 ```bash
@@ -66,6 +86,12 @@ apt find -l EV -n 15
 
 # Evaluate a single listing URL
 apt eval https://streeteasy.com/building/15-cornelia-street-new_york/5f
+
+# One-time: create the Notion listings database
+apt init
+
+# Add a listing to Notion + extract contact info
+apt add https://streeteasy.com/building/15-cornelia-street-new_york/5f
 
 # Sync Google Sheet — fill in agent contact info for new listings
 apt sync
@@ -112,5 +138,5 @@ This is the core of the system. The evaluation agents read this file to understa
 - [ ] **Bounding box search** — StreetEasy supports `in_rect` coordinates for map-bounded searches, but the URL only works in Safari (Chromium drops the bounding box). Need to either fix the URL encoding or have the agent zoom the map after loading.
 - [ ] **More listing sources** — Apartments.com, Zillow, Craigslist
 - [ ] **Automated outreach** — `apt reach` command to draft/send inquiry emails for new listings
-- [ ] **Notion integration** — Map pins + visual tracking (Notion API)
+- [x] **Notion integration** — `apt init` + `apt add` for visual tracking (Notion API)
 - [ ] **Dedup across runs** — Merge evaluations instead of overwriting, skip already-evaluated listings
