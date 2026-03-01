@@ -79,3 +79,10 @@ This is the core of the system. The evaluation agents read this file to understa
 - `data/{location}_inventory.json` — Raw filtered listings from search
 - `data/{location}_evaluations.json` — Structured evaluations
 - `findings/{timestamp}.md` — Ranked markdown report
+
+## Roadmap
+
+- [ ] **Bounding box search** — StreetEasy supports `in_rect` coordinates for map-bounded searches, but the URL only works in Safari (Chromium drops the bounding box). Need to either fix the URL encoding or have the agent zoom the map after loading.
+- [ ] **More listing sources** — Apartments.com, Zillow, Craigslist
+- [ ] **Broker outreach agent** — Automated availability checks and scheduling
+- [ ] **Dedup across runs** — Merge evaluations instead of overwriting, skip already-evaluated listings
