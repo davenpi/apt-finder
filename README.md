@@ -52,10 +52,11 @@ apt rank -l EV
 
 ### Location shortcuts
 
-| Flag | Neighborhood | URL                                                |
-| ---- | ------------ | -------------------------------------------------- |
-| `EV` | East Village | `streeteasy.com/for-rent/east-village/price:-4300` |
-| `WV` | West Village | `streeteasy.com/for-rent/west-village/price:-4300` |
+| Flag      | Neighborhood        | URL                                                |
+| --------- | ------------------- | -------------------------------------------------- |
+| `EV`      | East Village        | `streeteasy.com/for-rent/east-village/price:-4300` |
+| `EV-CORE` | East Village (core) | Same + bounding box: ~E 2nd–E 14th, 1st Ave–Ave B  |
+| `WV`      | West Village        | `streeteasy.com/for-rent/west-village/price:-4300` |
 
 Add more in the `LOCATIONS` dict in `search.py`.
 
