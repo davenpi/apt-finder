@@ -4,6 +4,7 @@ credentials.json
 authorized_user.json
 *.egg-info/
 *.log
+browser_data/
 data/
 findings/
 notes/

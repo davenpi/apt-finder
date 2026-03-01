@@ -11,6 +11,7 @@ Usage:
 
 import asyncio
 import json
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,7 @@ LOCATIONS = {
 BUDGET_CEILING = 4350
 BATCH_SIZE = 5
 HEADLESS = False
+BROWSER_DATA_DIR = Path("browser_data")
 DATA_DIR = Path("data")
 
 PREFERENCES = Path("preferences.md").read_text()
@@ -112,7 +114,10 @@ async def run_inventory(search_url: str, max_listings: int) -> list[Listing]:
 
     llm = ChatBrowserUse()
     profile = BrowserProfile(
-        headless=HEADLESS, viewport_width=800, viewport_height=1200
+        headless=HEADLESS,
+        viewport_width=800,
+        viewport_height=1200,
+        user_data_dir=str(BROWSER_DATA_DIR / "default"),
     )
     session = BrowserSession(browser_profile=profile)
 
@@ -235,13 +240,17 @@ def filter_listings(listings: list[Listing]) -> list[Listing]:
 
 
 async def evaluate_listing(
-    listing: Listing, semaphore: asyncio.Semaphore
+    listing: Listing, slot_pool: asyncio.Queue
 ) -> ListingEvaluation | None:
-    async with semaphore:
+    slot = await slot_pool.get()
+    try:
         print(f"  Evaluating: {listing.address} ({listing.url})")
 
         llm = ChatBrowserUse()
-        profile = BrowserProfile(headless=HEADLESS)
+        profile = BrowserProfile(
+            headless=HEADLESS,
+            user_data_dir=str(BROWSER_DATA_DIR / f"eval_{slot}"),
+        )
         session = BrowserSession(browser_profile=profile)
 
         agent = Agent(
@@ -309,18 +318,28 @@ Penalties (subtract points):
             use_vision=True,
         )
 
-        try:
-            result = await agent.run()
-            evaluation = result.get_structured_output(ListingEvaluation)
-            if evaluation:
-                print(f"  ✓ {listing.address} — score: {evaluation.score}/10")
-                return evaluation
-            else:
-                print(f"  ✗ {listing.address} — no structured output")
-                return None
-        except Exception as e:
-            print(f"  ✗ {listing.address} — error: {e}")
+        result = await agent.run()
+        evaluation = result.get_structured_output(ListingEvaluation)
+        if evaluation:
+            print(f"  ✓ {listing.address} — score: {evaluation.score}/10")
+            return evaluation
+        else:
+            print(f"  ✗ {listing.address} — no structured output")
             return None
+    except Exception as e:
+        print(f"  ✗ {listing.address} — error: {e}")
+        return None
+    finally:
+        slot_pool.put_nowait(slot)
+
+
+def _seed_eval_slots():
+    """Copy default browser data into each eval slot so captcha cookies carry over."""
+    default = BROWSER_DATA_DIR / "default"
+    if not default.exists():
+        return
+    for i in range(BATCH_SIZE):
+        shutil.copytree(default, BROWSER_DATA_DIR / f"eval_{i}", dirs_exist_ok=True)
 
 
 async def evaluate_all(listings: list[Listing]) -> list[ListingEvaluation]:
@@ -328,8 +347,12 @@ async def evaluate_all(listings: list[Listing]) -> list[ListingEvaluation]:
         f"\n=== STEP 3: Evaluate ({len(listings)} listings, batch size {BATCH_SIZE}) ==="
     )
 
-    semaphore = asyncio.Semaphore(BATCH_SIZE)
-    tasks = [evaluate_listing(listing, semaphore) for listing in listings]
+    _seed_eval_slots()
+
+    slot_pool: asyncio.Queue[int] = asyncio.Queue()
+    for i in range(BATCH_SIZE):
+        slot_pool.put_nowait(i)
+    tasks = [evaluate_listing(listing, slot_pool) for listing in listings]
     results = await asyncio.gather(*tasks)
 
     evaluations = [r for r in results if r is not None]
@@ -418,7 +441,10 @@ async def extract_contact(url: str) -> AgentContact | None:
     print(f"  Extracting contact: {url}")
 
     llm = ChatBrowserUse()
-    profile = BrowserProfile(headless=HEADLESS)
+    profile = BrowserProfile(
+        headless=HEADLESS,
+        user_data_dir=str(BROWSER_DATA_DIR / "default"),
+    )
     session = BrowserSession(browser_profile=profile)
 
     agent = Agent(
@@ -531,8 +557,9 @@ def eval_url(url: str):
     stub = Listing(address=address, price=0, beds="", baths="", url=url)
 
     async def _run():
-        semaphore = asyncio.Semaphore(1)
-        evaluation = await evaluate_listing(stub, semaphore)
+        slot_pool: asyncio.Queue[int] = asyncio.Queue()
+        slot_pool.put_nowait(0)
+        evaluation = await evaluate_listing(stub, slot_pool)
         if not evaluation:
             click.echo("Evaluation failed.")
             return
