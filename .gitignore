@@ -1,5 +1,9 @@
 .env
 preferences.md
+credentials.json
+authorized_user.json
+*.egg-info/
+*.log
 data/
 findings/
 notes/

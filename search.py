@@ -84,6 +84,23 @@ class ListingEvaluation(BaseModel):
     score_justification: str = Field(description="One-line justification for the score")
 
 
+class AgentContact(BaseModel):
+    agent_name: str = Field(
+        description="All listing agents' names, comma-separated if multiple"
+    )
+    agent_email: str = Field(default="", description="Agent email(s) if found")
+    agent_phone: str = Field(
+        description="All agent phone numbers found, comma-separated if multiple"
+    )
+    available_date: str = Field(
+        default="", description="Move-in / availability date if listed"
+    )
+    tour_dates: str = Field(
+        default="",
+        description="Available open house or tour dates/times if listed on the page",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Step 1: Inventory — extract all organic listings from search results
 # ---------------------------------------------------------------------------
@@ -392,6 +409,63 @@ def rank_and_output(evaluations: list[ListingEvaluation], search_url: str) -> Pa
 
 
 # ---------------------------------------------------------------------------
+# Contact extraction — lightweight agent for sync
+# ---------------------------------------------------------------------------
+
+
+async def extract_contact(url: str) -> AgentContact | None:
+    """Visit a StreetEasy listing and extract the listing agent's contact info."""
+    print(f"  Extracting contact: {url}")
+
+    llm = ChatBrowserUse()
+    profile = BrowserProfile(headless=HEADLESS)
+    session = BrowserSession(browser_profile=profile)
+
+    agent = Agent(
+        task=f"""Go to {url}
+
+You are extracting the LISTING AGENT's contact information from this StreetEasy page.
+
+1. Look for the agent/broker section on the listing page. It usually appears below
+   the listing details and shows the agent's name, brokerage, and contact info.
+2. If there are MULTIPLE agents listed, get ALL of their names and phone numbers.
+   Click EVERY "Show phone number" button you see.
+3. If there is a "Contact" or "Email Agent" button, click it to reveal email/phone.
+4. Look for the availability / move-in date (often shown near the top of the listing).
+5. Also look for any open house or tour availability on the page (often shown near
+   the top or in a scheduling section).
+6. Extract:
+   - agent_name: All agents' names, comma-separated if multiple
+   - agent_email: Their email address(es) (if visible)
+   - agent_phone: ALL phone numbers found, comma-separated if multiple
+   - available_date: The move-in or availability date (e.g. "4/2/2026")
+   - tour_dates: Any listed open house dates/times or tour availability (if visible)
+
+If you cannot find an email, phone, or tour dates, leave those fields as empty strings.
+Do NOT fabricate contact info — only extract what is actually on the page.""",
+        llm=llm,
+        browser_session=session,
+        output_model_schema=AgentContact,
+        use_vision=True,
+    )
+
+    try:
+        result = await agent.run()
+        contact = result.get_structured_output(AgentContact)
+        if contact:
+            print(
+                f"  -> {contact.agent_name} | {contact.agent_email} | {contact.agent_phone}"
+            )
+            return contact
+        else:
+            print(f"  -> No structured output for {url}")
+            return None
+    except Exception as e:
+        print(f"  -> Error extracting contact from {url}: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -510,3 +584,43 @@ def rank(location: str):
     key, search_url = resolve_location(location)
     evaluations = load_evaluations(key)
     rank_and_output(evaluations, search_url)
+
+
+@cli.command()
+def sync():
+    """Sync Google Sheet — fill in contact info for new listings."""
+    from sheet import get_client, get_new_rows, get_tracker, update_row
+
+    click.echo("Connecting to Google Sheets...")
+    client = get_client()
+    worksheet = get_tracker(client)
+
+    new_rows = get_new_rows(worksheet)
+    if not new_rows:
+        click.echo("No new rows to process.")
+        return
+
+    click.echo(f"Found {len(new_rows)} new listing(s) to process.\n")
+
+    async def _run():
+        for entry in new_rows:
+            row_num = entry["row"]
+            url = entry["url"]
+            click.echo(f"Row {row_num}: {url}")
+
+            contact = await extract_contact(url)
+            if contact:
+                update_row(
+                    worksheet,
+                    row_num,
+                    agent_name=contact.agent_name,
+                    agent_email=contact.agent_email,
+                    agent_phone=contact.agent_phone,
+                    available_date=contact.available_date,
+                    tour_dates=contact.tour_dates,
+                )
+                click.echo(f"  Updated row {row_num}\n")
+            else:
+                click.echo(f"  Could not extract contact for row {row_num}\n")
+
+    asyncio.run(_run())

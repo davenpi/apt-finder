@@ -7,13 +7,15 @@ requires-python = ">=3.12"
 dependencies = [
     "browser-use>=0.12.0",
     "click>=8.0",
+    "google-auth-oauthlib>=1.0.0",
+    "gspread>=6.1.0",
 ]
 
 [project.scripts]
 apt = "search:cli"
 
 [tool.setuptools]
-py-modules = ["search"]
+py-modules = ["search", "sheet"]
 
 [dependency-groups]
 dev = [
