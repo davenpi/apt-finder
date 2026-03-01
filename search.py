@@ -30,7 +30,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 LOCATIONS = {
     "EV": "https://streeteasy.com/for-rent/east-village/price:-4300",
-    "EV-CORE": "https://streeteasy.com/for-rent/east-village/price:-4300|in_rect:40.721,40.731,-73.991,-73.975",
+    "EV-CORE": "https://streeteasy.com/for-rent/east-village/price:-4300%7Cin_rect:40.721,40.731,-73.991,-73.975",
     "WV": "https://streeteasy.com/for-rent/west-village/price:-4300",
 }
 
