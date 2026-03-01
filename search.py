@@ -68,7 +68,6 @@ class ListingEvaluation(BaseModel):
     washer_dryer: str = Field(description="In-unit, in-building, or none")
     dishwasher: str = Field(description="Yes or No")
     elevator_or_walkup: str = Field(description="Elevator or walkup")
-    broker_fee: str = Field(description="No fee, 1 month, 15%, etc.")
     move_in_date: Optional[str] = Field(
         default=None, description="Move-in date if listed"
     )
@@ -252,7 +251,6 @@ Then produce a structured evaluation. Fill in every field carefully:
 - washer_dryer: "In-unit", "In-building", or "None"
 - dishwasher: "Yes" or "No"
 - elevator_or_walkup: "Elevator" or "Walkup"
-- broker_fee: "No fee", "1 month", "15%", etc.
 - move_in_date: if listed, null otherwise
 - days_on_market: number of days on market if shown on the listing, null otherwise
 - light_assessment: What do the photos tell you about natural light? How many
@@ -272,7 +270,6 @@ Bonuses (add points):
   +0.5  Modern/renovated kitchen
   +0.5  Under $3,800/mo
   +0.5  Quiet side street or rear-facing
-  +0.5  No broker fee
 
 Penalties (subtract points):
   -1.0  Any room with no window (windowless bedroom/flex = automatic)
@@ -367,7 +364,7 @@ def rank_and_output(evaluations: list[ListingEvaluation], search_url: str) -> Pa
     for i, ev in enumerate(ranked, 1):
         lines.append("---\n")
         lines.append(f"## #{i}: {ev.address} — {ev.score}/10\n")
-        lines.append(f"- **Price**: ${ev.price:,} | {ev.beds_baths} | {ev.broker_fee}")
+        lines.append(f"- **Price**: ${ev.price:,} | {ev.beds_baths}")
         if ev.sqft:
             lines.append(f"- **Size**: {ev.sqft}")
         if ev.floor:
